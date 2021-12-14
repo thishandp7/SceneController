@@ -1,2 +1,3 @@
-# SceneController
+:# SceneController
 Maya Isometric Scene Controller
+:wq

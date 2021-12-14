@@ -10,6 +10,7 @@ import dataStructures.ObjectContainer as oc
 importlib.reload(og)
 importlib.reload(oc)
 
+@DeprecationWarning
 class SubjectController(object):
 
 
@@ -196,20 +197,38 @@ class SubjectControllerV2(object):
 
 
     def __init__(self):
-        self.graph = og.ObjectGraph()
-        self.SCALE_MAX = 100
-        self.SCALE_MIN = 0
+        self.CENTER         = 'center'
+        self.SCALE_MAX      = 100
+        self.SCALE_MIN      = 0
+
+        self.graph          = og.ObjectGraph()
+        self.globeCenter    = None
+
+        self.lastMoveUpSliderValue = 0
+        self.lastSubjectYValue = 0
 
 
     def createSubjectControls(self, parentLayout):
         print('Creating Scene Controls...')
-        row = cmds.rowLayout(
+        row = cmds.rowColumnLayout(
             numberOfColumns=1,
             columnWidth=(1, 500),
             adjustableColumn=1,
             columnAttach=[(1, 'both', 100)],
             parent=parentLayout)
         self.buildSliderSetup(row, parentLayout)
+
+
+    def setGlobeCenter(self, globeCenter):
+        self.globeCenter = globeCenter
+
+
+    def getSubjectCenter(self):
+        return self.CENTER
+
+
+    def getGlobeCenter(self):
+        return self.globeCenter
 
 
     def addObjectCommand(self, *args):
@@ -227,7 +246,43 @@ class SubjectControllerV2(object):
             self.graph.addObject(selectedObjectName, newObject)
 
 
+    def createClusterManipulatorCommand(self, *args):
+        cmds.spaceLocator(name=self.CENTER, position=(0,0,0))
+        CENTER_GROUP = 'centerGrp'
+        cmds.group(self.CENTER, name=CENTER_GROUP)
+         # cmds.parentConstraint(CENTER_GROUP, self.CENTER, maintainOffset=True)
+        if self.globeCenter:
+            print('globe to center')
+            cmds.parentConstraint(self.globeCenter, CENTER_GROUP, maintainOffset=True)
+        fullGraph = self.graph.getFullGraph()
+        if bool(fullGraph):
+            for objectName in fullGraph:
+                cmds.parent(objectName, self.CENTER)
+
+
+    def moveUp(self, *args):
+        value = args[0]
+        subjectPosition = cmds.objectCenter(self.CENTER, local=True)
+        direction = 1 if value > self.lastMoveUpSliderValue else -1
+        moveUp = self.lastSubjectYValue + direction
+        print('moveUp: {mu}, subjectPosition[1]: {sp}, direction: {d}'.format(mu=moveUp, sp=subjectPosition[1], d=direction))
+        self.lastMoveUpSliderValue = value
+        self.lastSubjectYValue = moveUp
+        cmds.move(subjectPosition[0], moveUp, subjectPosition[2], self.CENTER, localSpace=True)
+
+
     def buildSliderSetup(self, row, parentLayout):
+        cmds.button(label='Create Cluster Manipulator', parent=row, command=self.createClusterManipulatorCommand)
+        cmds.intSliderGrp(
+            label='Move Up',
+            field=True,
+            minValue=0,
+            maxValue=100,
+            fieldMinValue=0,
+            fieldMaxValue=100,
+            value=20,
+            parent=row,
+            dc=self.moveUp)
         cmds.button(label='Add Selected Objects', parent=row, command=lambda x: self.addObjectCommand(x, parentLayout))
 
 
@@ -294,6 +349,7 @@ class FloorController(object):
 
     def __init__(self):
         self.ELEVATION_SLIDER_NAME  = 'Globe Elevation: '
+        self.GLOBE_CENTER           = 'globeCenter'
         self.GLOBE_GEO_NAME         = 'globe'
         self.GLOBE_GEO_GROUP_NAME   = 'globeGroup'
         self.SCALE_SLIDER_NAME      = 'Globe Scale: '
@@ -309,8 +365,7 @@ class FloorController(object):
         self.floorControlsLayout    = None
         self.globeEvevationSlider   = None
         self.globeScaleSlider       = None
-
-        self.buildGlobeSphere()
+        self.subjectCenter          = None
 
 
     def buildGlobeSphere(self):
@@ -326,6 +381,15 @@ class FloorController(object):
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleX', self.GLOBE_DEFAULT_SIZE)
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleY', self.GLOBE_DEFAULT_SIZE)
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleZ', self.GLOBE_DEFAULT_SIZE)
+        self.createGlobeCenter()
+
+
+    def setSubjectCenter(self, centerName):
+        self.subjectCenter = centerName
+
+
+    def getGlobeCenter(self):
+        return self.GLOBE_CENTER
 
 
     def setGlobeSize(self, scalar):
@@ -333,12 +397,22 @@ class FloorController(object):
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleX', scalar)
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleY', scalar)
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.scaleZ', scalar)
+        # self.updateCenterHeight(scalar=scalar)
 
 
     def setElevation(self, height):
         print('setElevation with {data}'.format(data=height))
         elevation = height * -1
         cmds.setAttr(self.GLOBE_GEO_GROUP_NAME + '.translateY', elevation)
+
+
+    def createGlobeCenter(self):
+        print('Creating Globe Center')
+        globePosition = cmds.objectCenter(self.GLOBE_GEO_GROUP_NAME, local=True)
+        print('globeCenterPosition {values}'.format(values=globePosition))
+        cmds.spaceLocator(name=self.GLOBE_CENTER , position=globePosition)
+        cmds.xform(self.GLOBE_CENTER , centerPivots=True)
+        cmds.parent(self.GLOBE_CENTER , self.GLOBE_GEO_GROUP_NAME)
 
 
     def createFloorControls(self, parentLayout):
@@ -377,18 +451,21 @@ class CameraController(object):
     def __init__(self):
         self.CAMERA_NAME                = 'mainCam'
         self.CAMERA_CENTER_SLIDER_NAME  = 'Center Position: '
+        self.CAMERA_FOCAL_SLIDER_NAME   = 'Camera Focal: '
         self.CAMERA_ZOOM_SLIDER_NAME    = 'Camera Zoom: '
 
         self.CENTER_MIN                 = -20
-        self.CENTER_MAX                 = 5
-        self.CENTER_DEFAULT             = 4.5
+        self.CENTER_MAX                 = 10
+        self.CENTER_DEFAULT             = 6
+
+        self.FOCAL_MIN                  = 3
+        self.FOCAL_MAX                  = 300
+        self.FOCAL_DEFAULT              = 300
 
         self.ZOOM_MIN                   = -150
-        self.ZOOM_MAX                   = 150
+        self.ZOOM_MAX                   = 350
         self.ZOOM_DEFAULT               = 0
         self.zoomPrev                   = 0
-
-        self.buildMainCamera()
 
 
     def setCameraCenter(self, position):
@@ -402,6 +479,11 @@ class CameraController(object):
         moveValue = self.zoomPrev - zoomLevel
         cmds.move(0, 0, moveValue, relative=True, objectSpace=True, worldSpaceDistance=True)
         self.zoomPrev = zoomLevel
+
+
+    def setCameraFocal(self, focalLevel):
+        print('Camera focal: {data}'.format(data=focalLevel))
+        cmds.setAttr(self.CAMERA_NAME + 'Shape1.focalLength', focalLevel)
 
 
     def buildMainCamera(self):
@@ -458,6 +540,16 @@ class CameraController(object):
                             cc=self.setCameraCenter,
                             dc=self.setCameraCenter)
 
+        cmds.floatSliderGrp(label=self.CAMERA_FOCAL_SLIDER_NAME,
+                            field=True,
+                            minValue=self.FOCAL_MIN,
+                            maxValue=self.FOCAL_MAX,
+                            fieldMinValue=self.FOCAL_MIN,
+                            fieldMaxValue=self.FOCAL_MAX,
+                            value=self.FOCAL_DEFAULT,
+                            parent=columnLayout,
+                            dc=self.setCameraFocal)
+
         cmds.floatSliderGrp(label=self.CAMERA_ZOOM_SLIDER_NAME,
                             field=True,
                             minValue=self.ZOOM_MIN,
@@ -476,10 +568,12 @@ class Context(object):
         self.SIZE                   = (500, 600)
         self.TITLE                  = 'Scene Controller'
         self.WINDOW                 = 'sceneControllerUI'
-        # self.cameraController       = CameraController()
-        # self.floorController        = FloorController()
-        # self.subjectController      = SubjectController()
+
+        self.cameraController       = CameraController()
+        self.floorController        = FloorController()
         self.subjectController      = SubjectControllerV2()
+
+        self.isNewBuild             = False
 
         if cmds.window(self.WINDOW, exists=True):
             print
@@ -500,9 +594,16 @@ class Context(object):
 
 
     def run(self):
-        # self.cameraController.createCameraControls(parentLayout=self.main_layout)
-        # self.floorController.createFloorControls(parentLayout=self.main_layout)
+        if self.isNewBuild:
+            self.floorController.buildGlobeSphere()
+            self.cameraController.buildMainCamera()
+        self.cameraController.createCameraControls(parentLayout=self.main_layout)
+        self.floorController.createFloorControls(parentLayout=self.main_layout)
         self.subjectController.createSubjectControls(parentLayout=self.main_layout)
+        globeCenter = self.floorController.getGlobeCenter()
+        self.subjectController.setGlobeCenter(globeCenter)
+        subjectCenter = self.subjectController.getSubjectCenter()
+        self.floorController.setSubjectCenter(subjectCenter)
 
 
 # Press the green button in the gutter to run the script.
